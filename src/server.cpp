@@ -387,13 +387,7 @@ size_t req_reply(void *ptr, size_t size, size_t nmemb, void *stream)
 }
 
 
-
-
-
-
-
 static int g_roomId =1;
-
 struct UserInfo
 {
 	int uid;
@@ -428,6 +422,19 @@ static  void setUserInfo(UserInfo*user_info,int uid,const std::string &secret,co
     user_info->uid = uid;
 }
 
+static void createRoom(int&uid,int&roomid,const std::string &secret,const std::string &address)
+{
+    uid = 0;
+    GameInfo* game_info = new GameInfo();
+    UserInfo* user_info = new UserInfo();
+    setUserInfo(user_info,uid,secret,address);
+    game_info->user_group.push_back(user_info);
+    game_info->user_size =1;
+    g_mapGameInfo[g_roomId] = game_info;
+    roomid = g_roomId;
+    g_roomId++;
+}
+
 void encodeNumber(std::unique_ptr<HTTPRequest> req)
 {
     try
@@ -452,18 +459,11 @@ void encodeNumber(std::unique_ptr<HTTPRequest> req)
         std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.begin();
         if(iter == g_mapGameInfo.end())
         {
-            GameInfo* game_info = new GameInfo();
-            UserInfo* user_info = new UserInfo();
-            uid = 0;
-            setUserInfo(user_info,uid,secret,address);
-            game_info->user_group.push_back(user_info);
-            game_info->user_size =1;
-            g_mapGameInfo[g_roomId] = game_info;
-            roomid = g_roomId;
-            g_roomId++;
+            createRoom(uid,roomid,secret,address);
         }
         else
         {
+            bool has_match = false;
             for(;iter != g_mapGameInfo.end();++iter)
             {
                 if(iter->second->user_size == 1)
@@ -474,8 +474,14 @@ void encodeNumber(std::unique_ptr<HTTPRequest> req)
                     iter->second->user_group.push_back(user_info);
                     iter->second->user_size =2;
                     roomid = iter->first;
+                    has_match =true;
                     break;
                 }
+            }
+
+            if (!has_match)
+            {
+                createRoom(uid,roomid,secret,address);
             }
         }
 
@@ -503,6 +509,7 @@ void getSecret(std::unique_ptr<HTTPRequest> req)
 {
     try
     {
+	int ret_code=0;
         std::string post_data = req->ReadBody();
         std::cout << "getSecret receive:"  <<  post_data << std::endl;
         auto jsonData = json::parse(post_data);
@@ -521,6 +528,7 @@ void getSecret(std::unique_ptr<HTTPRequest> req)
             if( g_mapGameInfo[roomid]->user_size == 1)
             {
                 strReply =  "Maybe no user player with you!";
+		ret_code=1;
             }
             else
             {
@@ -537,11 +545,12 @@ void getSecret(std::unique_ptr<HTTPRequest> req)
         }
         else
         {
+	    ret_code=2;
             strReply =  "No init!";
 
         }
 
-        std::string result = makeReplyMsg(1,strReply);
+        std::string result = makeReplyMsg(ret_code,strReply);
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK,result);
         return;
@@ -574,12 +583,14 @@ void createFundTx(std::unique_ptr<HTTPRequest> req)
         std::string amount = jsonData["amount"].get<std::string>();
         int vout = jsonData["vout"].get<int>();
 
+	int ret_code = 0;
         std::string strReply;
         std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.find(roomid);
         if ( iter != g_mapGameInfo.end())
         {
             if(iter->second->user_size != 2)
             {
+		ret_code =1;
                 strReply = "No one palys with you!";
             }
             else
@@ -594,9 +605,10 @@ void createFundTx(std::unique_ptr<HTTPRequest> req)
         }
         else
         {
+	    ret_code=2;
             strReply = "No such roomid!";
         }
-        std::string result = makeReplyMsg(1,strReply);
+        std::string result = makeReplyMsg(ret_code,strReply);
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK,result);
     }
@@ -621,6 +633,7 @@ void getFundTx(std::unique_ptr<HTTPRequest> req)
             LOG(ERROR) << " getFundTx  params error\n ";
             throw;
         }
+	int ret_code=0;
         int roomid = jsonData["roomid"].get<int>();
         std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.find(roomid);
         std::string strReply;
@@ -628,6 +641,7 @@ void getFundTx(std::unique_ptr<HTTPRequest> req)
         {
             if(iter->second->vin_size != 2)
             {
+		ret_code=1;
                 strReply = "No one palys agree you!";
             }
             else
@@ -636,22 +650,50 @@ void getFundTx(std::unique_ptr<HTTPRequest> req)
                 std::string txid="txid";
                 std::string vout="vout";
                 std::string amount = "amount";
+		
                 for(int i =0;i<g_mapGameInfo[roomid]->user_group.size();i++)
                 {
                    response[txid + std::to_string(i)] = g_mapGameInfo[roomid]->user_group[i]->txid;
                    response[amount + std::to_string(i)] = g_mapGameInfo[roomid]->user_group[i]->amount;
                    response[vout + std::to_string(i)] = g_mapGameInfo[roomid]->user_group[i]->vout;
                 }
+		double amount0 = atof(g_mapGameInfo[roomid]->user_group[0]->amount.c_str());
+		double amount1 = atof(g_mapGameInfo[roomid]->user_group[1]->amount.c_str());
+                double  changle = amount0 - amount1;
+                if( changle == 0.0)
+                {
+                    response["changeAddress"] = "";
+                    response["change"] = "";
+            response["scriptAmount"] = std::to_string(amount0*2 - 0.01);
+		    
+                }
+                else if( changle > 0.0 )
+                {
+                    response["changeAddress"] = g_mapGameInfo[roomid]->user_group[0]->address;
+                    response["change"] = std::to_string(changle);
+            response["scriptAmount"] = std::to_string(amount1*2 - 0.01);
+                }
+                else
+                {
+                    changle = -changle;
+                    response["changeAddress"] = g_mapGameInfo[roomid]->user_group[0]->address;
+                    response["change"] = std::to_string(changle);
+            response["scriptAmount"] = std::to_string(amount0*2 - 0.01);
+                }
+		
+		
+
                 response["hexTx"] = g_mapGameInfo[roomid]->fund_tx;
                 strReply = response.dump();
             }
         }
         else
         {
+	    ret_code=2;
             strReply = "No such roomid!";
         }
 
-        std::string result = makeReplyMsg(1,strReply);
+        std::string result = makeReplyMsg(ret_code,strReply);
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK,result);
 
@@ -684,10 +726,12 @@ void anounceSecret(std::unique_ptr<HTTPRequest> req)
         int uid = jsonData["uid"].get<int>();
         std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.find(roomid);
         std::string strReply;
+	int ret_code =0;
         if ( iter != g_mapGameInfo.end())
         {
             if(iter->second->user_size != 2)
             {
+		ret_code=1;
                 strReply = "No one palys with you!";
             }
             else
@@ -699,10 +743,11 @@ void anounceSecret(std::unique_ptr<HTTPRequest> req)
             }
         }
         else
-        {
+        {	
+            ret_code=2;
             strReply = "No such roomid!";
         }
-        std::string result = makeReplyMsg(1,strReply);
+        std::string result = makeReplyMsg(ret_code,strReply);
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK,result);
         return;
@@ -723,21 +768,20 @@ void getNum(std::unique_ptr<HTTPRequest> req)
         std::string post_data = req->ReadBody();
         std::cout << "getNum receive:"  <<  post_data << std::endl;
         auto jsonData = json::parse(post_data);
-
         if(!jsonData.is_object())
         {
             LOG(ERROR) << " getNum  params error\n ";
             throw;
         }
-
         int roomid = jsonData["roomid"].get<int>();
-
         std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.find(roomid);
         std::string strReply;
+	int ret_code = 0;
         if ( iter != g_mapGameInfo.end())
         {
             if(iter->second->anounce_size != 2)
             {
+		ret_code = 1;
                 strReply = "No one palys with you!";
             }
             else
@@ -755,9 +799,10 @@ void getNum(std::unique_ptr<HTTPRequest> req)
         }
         else
         {
+	    ret_code = 2;
             strReply = "No such roomid!";
         }
-        std::string result = makeReplyMsg(1,strReply);
+        std::string result = makeReplyMsg(ret_code,strReply);
         req->WriteHeader("Content-Type", "application/json");
         req->WriteReply(HTTP_OK,result);
         return;
@@ -788,10 +833,12 @@ void signFundTx(std::unique_ptr<HTTPRequest> req)
             std::string hexTx = jsonData["hex"].get<std::string>();
             std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.find(roomid);
             std::string strReply;
+            int ret_code =0 ;
             if ( iter != g_mapGameInfo.end())
             {
                 if(iter->second->user_size != 2)
                 {
+                    ret_code =1;
                     strReply = "No one palys with you!";
                 }
                 else
@@ -802,9 +849,10 @@ void signFundTx(std::unique_ptr<HTTPRequest> req)
             }
             else
             {
+		ret_code = 2;
                 strReply = "No such roomid!";
             }
-            std::string result = makeReplyMsg(1,strReply);
+            std::string result = makeReplyMsg(ret_code,strReply);
             req->WriteHeader("Content-Type", "application/json");
             req->WriteReply(HTTP_OK,result);
             return;
@@ -813,6 +861,22 @@ void signFundTx(std::unique_ptr<HTTPRequest> req)
         {
             LOG(ERROR) << "  signFundTx error: \n ";
         }
-
         req->WriteReply(HTTP_INTERNAL,ERROR_REQUEST);
+}
+
+static void releaseRoom(int room_id)
+{
+     std::map<int ,GameInfo*>::iterator iter = g_mapGameInfo.find(room_id);
+
+     if ( iter != g_mapGameInfo.end() )
+     {
+         for ( int i =0 ; i<g_mapGameInfo[room_id]->user_group.size() ;++i )
+         {
+             delete g_mapGameInfo[room_id]->user_group[i];
+         }
+
+         delete g_mapGameInfo[room_id];
+         g_mapGameInfo.erase(room_id);
+     }
+
 }
