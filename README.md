@@ -1,18 +1,17 @@
-# Relay  
+# relay  
 relay node's info and store it into ipfs  
 
 
-### TokenDice example  
-* API list:   
- encodeNumber  
- getSecret  
- createFundTx  
- signFundTx  
- getFundTx  
- anounceSecret  
- getNum    
+### tokendice example  
+* encodeNumber  
+* getSecret  
+* createFundTx  
+* signFundTx  
+* getFundTx  
+* anounceSecret  
+* getNum    
 
-### Roadmap  
+### roadmap  
 
 * a sidechain for bitcoincash  
 
